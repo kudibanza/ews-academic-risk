@@ -1,0 +1,25 @@
+# Datasets
+data/raw/
+
+# Generated SHAP artifacts
+results/shap_artifacts/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Environment
+.env
+.env.*
+
+# Node.js
+node_modules/
+.next/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/

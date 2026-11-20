@@ -1,0 +1,162 @@
+{
+  "courses.csv": {
+    "rows": 22,
+    "cols": 3,
+    "missing_columns": [],
+    "extra_columns": [],
+    "null_counts": {}
+  },
+  "assessments.csv": {
+    "rows": 206,
+    "cols": 6,
+    "missing_columns": [],
+    "extra_columns": [],
+    "null_counts": {
+      "date": 11
+    }
+  },
+  "vle.csv": {
+    "rows": 6364,
+    "cols": 6,
+    "missing_columns": [],
+    "extra_columns": [],
+    "null_counts": {
+      "week_from": 5243,
+      "week_to": 5243
+    }
+  },
+  "studentAssessment.csv": {
+    "rows": 173912,
+    "cols": 5,
+    "missing_columns": [],
+    "extra_columns": [],
+    "null_counts": {
+      "score": 173
+    }
+  },
+  "studentVle.csv": {
+    "rows": 10655280,
+    "cols": 6,
+    "missing_columns": [],
+    "extra_columns": [],
+    "null_counts": {}
+  },
+  "studentInfo.csv": {
+    "rows": 32593,
+    "cols": 12,
+    "missing_columns": [],
+    "extra_columns": [],
+    "null_counts": {
+      "imd_band": 1111
+    }
+  },
+  "studentRegistration.csv": {
+    "rows": 32593,
+    "cols": 5,
+    "missing_columns": [],
+    "extra_columns": [],
+    "null_counts": {
+      "date_registration": 45,
+      "date_unregistration": 22521
+    }
+  },
+  "key_studentInfo": {
+    "rows": 32593,
+    "unique": 32593,
+    "duplicates": 0
+  },
+  "key_courses": {
+    "rows": 22,
+    "unique": 22,
+    "duplicates": 0
+  },
+  "key_assessments": {
+    "rows": 206,
+    "unique": 206,
+    "duplicates": 0
+  },
+  "key_vle": {
+    "rows": 6364,
+    "unique": 6364,
+    "duplicates": 0
+  },
+  "key_studentRegistration": {
+    "rows": 32593,
+    "unique": 32593,
+    "duplicates": 0
+  },
+  "ri_studentRegistration -> studentInfo (composite key)": 0,
+  "ri_studentVle -> studentInfo (composite key)": 0,
+  "ri_studentAssessment.id_student -> studentInfo.id_student": 0,
+  "ri_studentVle.id_site -> vle.id_site": 0,
+  "ri_studentAssessment.id_assessment -> assessments.id_assessment": 0,
+  "canonical_unique_students": {
+    "observed": 28785,
+    "canonical": 32593,
+    "match": false
+  },
+  "canonical_studentVle_rows": {
+    "observed": 10655280,
+    "canonical": 10655280,
+    "match": true
+  },
+  "canonical_studentAssessment_rows": {
+    "observed": 173912,
+    "canonical": 173912,
+    "match": true
+  },
+  "canonical_modules": {
+    "observed": 7,
+    "canonical": 7,
+    "match": true
+  },
+  "canonical_presentations": {
+    "observed": 4,
+    "canonical": 4,
+    "match": true
+  },
+  "canonical_module_presentations": {
+    "observed": 22,
+    "canonical": 22,
+    "match": true
+  },
+  "target_2013B": {
+    "n": 4684,
+    "Pass": 1768,
+    "Fail": 1241,
+    "Withdrawn": 1348,
+    "Distinction": 327,
+    "risk_proportion": 0.5527
+  },
+  "target_2013J": {
+    "n": 8845,
+    "Pass": 3726,
+    "Fail": 2001,
+    "Withdrawn": 2369,
+    "Distinction": 749,
+    "risk_proportion": 0.4941
+  },
+  "target_2014B": {
+    "n": 7804,
+    "Pass": 2574,
+    "Fail": 1833,
+    "Withdrawn": 2613,
+    "Distinction": 784,
+    "risk_proportion": 0.5697
+  },
+  "target_2014J": {
+    "n": 11260,
+    "Pass": 4293,
+    "Fail": 1977,
+    "Withdrawn": 3826,
+    "Distinction": 1164,
+    "risk_proportion": 0.5154
+  },
+  "temporal": {
+    "max_module_length": 269,
+    "students_with_activity_by_W2": 25111,
+    "date_unregistration_dtype": "float64",
+    "date_unregistration_nonnull": 10072,
+    "date_unregistration_null": 22521
+  }
+}

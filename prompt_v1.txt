@@ -1,0 +1,76 @@
+Os resumos de prompts till passo 3: https://chat.deepseek.com/share/i2c504elcrqvhvy7uw
+
+------ Primeira Fase ---- 
+# RESUME — EWS Thesis (OULAD) 
+
+## Context
+Thesis: ML Early Warning System for student academic risk/dropout (OULAD).
+Author: Kudibanza Afonso Pemba (3820251124). Workdir: ews_thesis/.
+Project artefacts in ENGLISH. Chat explanations in PORTUGUESE.
+Method: strict step-by-step; confirm before advancing; scripts report-only.
+
+## Frozen (protocol.yaml v1.0.3, §1–§15; §14=output_contract, §15=change_log)
+- Target primary: Withdrawn ∪ Fail vs {Pass, Distinction}.
+  Secondary (exploratory only): Withdrawn.
+- Windows (days): W2=14, W4=28, W6=42, W8=56.
+- Exclusion: drop at window k iff date_unregistration.notna() AND
+  date_unregistration <= cutoff_k. NEVER depend on date_registration.
+- Zero-leakage: R1 fit only on train fold; R2 resample only train fold
+  after split; R3 features use only date <= cutoff, computed before split;
+  R4 GroupKFold by student_id. R3+R4 jointly.
+- Validation: GroupKFold(5) by student_id; cross-cohort train
+  {2013B,2013J} -> test {2014B,2014J}, no retraining, no threshold recalib.
+- Imbalance: none/SMOTE/ADASYN/Tomek/class_weight; calibrate Platt or
+  isotonic; report ECE, Brier.
+- Cost: C_FN:C_FP = 5:1 primary; 3:1 and 10:1 sensitivity. theta in
+  [0.1,0.9] step 0.01, minimize expected cost on validation fold.
+- Models: LogReg, DecisionTree; RF, XGBoost, LightGBM.
+- Metrics: PR-AUC, Recall, F2 (primary); Precision, ROC-AUC, ECE, Brier,
+  expected_cost (secondary). Seed 42. MLflow.
+- §14 output: JSONL, one record per (student_id, window, presentation)
+  with risk_score, threshold_applied, flagged, top_positive_factors,
+  top_negative_factors, base_value; stored in results/shap_artifacts/.
+- Scope: ML pipeline + experiments primary; minimal prototype secondary
+  (RQ5). Out of scope: microservices, load testing, prod auth, deploy.
+
+## Closed steps
+- STEP 0: contract frozen (above).
+- STEP 1: data audit closed.
+  * 7 CSVs in data/raw/; checksums in data/raw/checksums_manifest.csv
+    (SHA-256, local baseline). studentVle = 453,836,331 bytes.
+  * src/data/audit_schema.py -> experiments/01_data_audit/
+    audit_report.md + audit_summary.json.
+  * tests/test_data_schema.py -> 16/16 PASSED.
+  * Facts: studentInfo=32,593 rows / 28,785 unique students / 3,808
+    overlap -> Rule 4 mandatory. studentVle=10,655,280 and
+    studentAssessment=173,912 (canonical exact). 7 modules, 4 presentations,
+    22 module-presentations. Risk proportion by presentation:
+    2013B=0.553, 2013J=0.494, 2014B=0.570, 2014J=0.515 (~8 pp variation;
+    interpret cross-cohort accordingly). Max module length 269 d.
+    25,111 students (87.2%) active by W2. date_registration: 45 nulls.
+    date_unregistration: 10,072 non-null, 22,521 null; range -365..444.
+    45 rows null registration AND null unregistration -> INCLUDE (no
+    evidence of withdrawal). Both date cols float64 with no fractional
+    values -> convert to nullable Int64 in Step 2.
+
+## Structure (frozen)
+config/ data/{raw,interim,processed}/ src/{data,features,models,
+imbalance,explain,utils}/ experiments/{01_data_audit,02_feature_build,
+03_model_benchmark,04_imbalance_cost,05_shap,06_cross_cohort}/
+results/{tables,figures,mlflow}/ notebooks/ tests/ README.md
+requirements.txt. All src packages have __init__.py.
+
+## Next: STEP 2 — Feature engineering + zero-leakage asserts (not started)
+- Implement §5 cumulative features per window (S_vle, D_active, H_entropy
+  Shannon over 20 activity types, Delta_t, S_score, still_registered)
+  using only date <= cutoff_k, computed per student BEFORE any split.
+- Apply §4 exclusion before split. Convert date cols to nullable Int64.
+- Output per-window datasets in data/processed/ (W2..W8).
+- Implement R1–R4 asserts as tests/; run pytest.
+- Report in experiments/02_feature_build/ (English).
+- Do NOT train models (Step 3). Do NOT touch web app (Step 7).
+- Present scope for approval BEFORE writing code; one sub-step at a time.
+
+
+
+----- FASE 2 ---- 

@@ -1,0 +1,181 @@
+# RESUME PROMPT — EWS Thesis Project (OULAD) — after Step 3 (final)
+
+## Context
+Master's thesis: "Design and implementation of an Early Warning System for
+Student academic Risk and Dropout Prediction using Machine Learning".
+Author: Kudibanza Afonso Pemba (3820251124), BIT Zhuhai.
+Thesis in English. Chat explanations in Portuguese.
+Workdir: ews-dropout-prediction/ (macOS, Python 3.11.5, .venv active).
+System prerequisites: brew install libomp (for xgboost/lightgbm).
+Libraries installed: pandas, numpy, scikit-learn, xgboost 3.2.0,
+lightgbm 4.7.0, pyarrow, mlflow (pending integration).
+
+## Working method (STRICT)
+- Step-by-step. One sub-step at a time. Confirm before advancing.
+- Scripts REPORT only; never modify data during audits.
+- All project artefacts in ENGLISH. Chat explanations in PORTUGUESE.
+- Verify before delivering; avoid rework.
+
+## Protocol: config/protocol.yaml v1.0.11
+Sections: §1–§13, §14 output_contract, §16 benchmark_variants,
+§15 change_log (last in file; order 14→16→15 intentional).
+
+### Frozen scientific decisions
+1. Target primary: Withdrawn ∪ Fail vs {Pass, Distinction}.
+   Secondary (EXPLORATORY only): Withdrawn.
+2. Windows: W2=14, W4=28, W6=42, W8=56 (days since course start).
+3. Exclusion: drop at window k iff date_unregistration.notna() AND
+   date_unregistration <= cutoff_k. NEVER depend on date_registration.
+4. Zero-leakage Rules R1–R4:
+   R1 preprocessing isolation (fit only on train fold);
+   R2 resampling only train fold after split;
+   R3 temporal boundary (features use date <= cutoff, computed before split);
+   R4 GroupKFold by student_id. R3+R4 jointly.
+5. Validation: GroupKFold(5) by student_id; cross-cohort train
+   {2013B,2013J} -> test {2014B,2014J}, no retraining, no threshold recalib.
+6. Imbalance: none/SMOTE/ADASYN/Tomek/class_weight; calibrate Platt or
+   isotonic; report ECE, Brier.
+7. Cost: C_FN:C_FP = 5:1 primary; 3:1 and 10:1 sensitivity. theta in
+   [0.1,0.9] step 0.01, minimize expected cost on validation fold.
+8. Models: LogReg, DecisionTree; RF, XGBoost, LightGBM.
+9. Metrics: PR-AUC, Recall, F2 (primary); Precision, ROC-AUC, ECE, Brier,
+   expected_cost (secondary). Seed 42.
+10. §14 output: JSONL, one record per (student_id, window, presentation)
+    with risk_score, threshold_applied, flagged, top_positive_factors,
+    top_negative_factors, base_value; stored results/shap_artifacts/.
+11. §5 features (7): S_vle, D_active, H_entropy, Delta_t, S_score,
+    still_registered, click_trend.
+12. §16 benchmark variants (FROZEN):
+    - W2 Variant A: retain Delta_t and S_score with training-fold imputation.
+    - W2 Variant B: drop Delta_t and S_score in W2 only.
+    - RESULT: A marginally better (+0.003 to +0.011 PR-AUC). A retained.
+    - Tuning order: benchmark with default hyperparameters (done);
+      hyperparameter tuning in Step 3b (pending).
+13. Scope: ML pipeline + experiments primary; minimal prototype secondary
+    (RQ5). Out: microservices, load testing, prod auth, deployment.
+14. Web app: NOT yet. Own webapp_protocol.yaml at Step 7.
+
+### Key audit facts (Step 1, in §1 audit_notes)
+- studentInfo = 32,593 rows; unique students = 28,785;
+  overlap_rows = 3,808; overlap_students = 3,538. Rule 4 mandatory.
+- studentVle = 10,655,280 rows; studentAssessment = 173,912 rows.
+- modules=7, presentations=4, module-presentations=22.
+- Risk proportion by presentation: 2013B=0.553, 2013J=0.494,
+  2014B=0.570, 2014J=0.515 (~8 pp variation).
+- Max module length 269 d. 25,111 students (87.2%) active by W2.
+- 45 rows null registration AND null unregistration -> INCLUDE.
+- date_registration/date_unregistration converted to Int64.
+
+## Completed steps
+
+### STEP 0 — Contract frozen (v1.0.11)
+
+### STEP 1 — Data audit (closed)
+- 7 CSVs in data/raw/; SHA-256 manifest in checksums_manifest.csv.
+- src/data/checksums.py, src/data/audit_schema.py.
+- experiments/01_data_audit/audit_report.md + audit_summary.json.
+- tests/test_data_schema.py: 16/16 passed.
+
+### STEP 2 — Feature engineering + zero-leakage (closed)
+Sub-step 2.1 — cleaning + exclusion:
+- src/data/cleaning.py -> data/processed/eligibility_W{2,4,6,8}.parquet.
+- Excluded per window: W2=4,474; W4=5,055; W6=5,569; W8=6,071.
+- Eligible per window: W2=28,119; W4=27,538; W6=27,024; W8=26,522.
+- Exclusion decomposition (unregistration date): <0: 2,678; 0–14: 1,796;
+  15–28: 581; 29–42: 514; 43–56: 502; >56: 4,001. Total 10,072.
+- experiments/02_feature_build/cleaning_report.md + cleaning_summary.json.
+
+Sub-step 2.2 — feature engineering:
+- src/features/build_features.py -> data/processed/features_W{2,4,6,8}.parquet.
+- 7 features per §5 (click_trend added v1.0.5).
+- Rows per window match eligible counts exactly. still_registered = [1].
+- CRITICAL FINDING: in W2, only 1 assessment in all OULAD is due by day 14
+  (id_assessment=15008, BBB, 2014B). Delta_t/S_score coverage ~4% in W2
+  (1,186 of 28,119), 75% in W4 (20,670 of 27,538).
+- experiments/02_feature_build/feature_report.md + feature_summary.json.
+
+Sub-step 2.3 — leakage asserts:
+- tests/test_leakage.py: R3 and R4 active (6 passed).
+- experiments/02_feature_build/leakage_report.md.
+
+### STEP 3 — Model benchmarking (closed)
+Sub-step 3.1 — pipeline + metrics + R1/R2 activation:
+- src/models/pipeline.py: build_pipeline(model, variant) with
+  SimpleImputer(median) + optional StandardScaler (logreg only) +
+  classifier. All transforms fit only on training fold (R1).
+- src/models/metrics.py: compute_metrics -> pr_auc, roc_auc, recall,
+  precision, f2.
+- src/models/benchmark.py: run_benchmark() + summarize().
+- tests/test_leakage.py: R1 and R2 activated and passing.
+  pytest: 8/8 passed.
+- pytest.ini added (pythonpath = .).
+- libomp installed via Homebrew; use_label_encoder=False is a no-op
+  in xgboost 3.2.0 (harmless warning; can be removed in 3b).
+
+Sub-step 3.2 — benchmark execution:
+- 25 runs: 4 windows × 5 models + 5 extra for W2 variant B.
+- 125 fits total (5 folds per run).
+- results/tables/benchmark_results.csv (125 rows).
+- results/tables/benchmark_summary.csv (25 rows, mean ± std).
+
+Sub-step 3.3 — benchmark report:
+- experiments/03_model_benchmark/benchmark_report.md (per-window tables,
+  findings, reproducibility).
+
+## Benchmark results (summary)
+
+| Window | Best model | PR-AUC | ROC-AUC | Recall @0.5 | Precision | F2 |
+|---|---|---|---|---|---|---|
+| W2 | lightgbm (A) | 0.619 ± 0.005 | 0.671 | 0.520 | 0.608 | 0.535 |
+| W4 | lightgbm | 0.694 ± 0.011 | 0.737 | 0.568 | 0.668 | 0.585 |
+| W6 | lightgbm | 0.715 ± 0.012 | 0.762 | 0.577 | 0.689 | 0.596 |
+| W8 | lightgbm | 0.745 ± 0.019 | 0.788 | 0.580 | 0.717 | 0.603 |
+
+Findings:
+- Model ranking stable across windows: lightgbm > xgboost > rf > logreg > dtree.
+- Temporal monotonic improvement: 0.619 → 0.694 → 0.715 → 0.745 PR-AUC.
+  Largest gain W2→W4 (+0.075), coinciding with assessment coverage jump.
+- W2 A vs B: A marginally better (+0.003 to +0.011 PR-AUC). A retained.
+- Recall at threshold 0.5 is ~0.58 in W8 → 42% of at-risk students missed
+  at default cutoff. This is the Step 4 baseline.
+- Fold stability: pos_rate_test varies by at most 3.4 pp (W8);
+  per-fold PR-AUC std 0.004–0.023. GroupKFold produces balanced folds.
+
+## Folder structure (frozen)
+config/ data/{raw,interim,processed}/ src/{data,features,models,
+imbalance,explain,utils}/ experiments/{01_data_audit,02_feature_build,
+03_model_benchmark,04_imbalance_cost,05_shap,06_cross_cohort}/
+results/{tables,figures,mlflow}/ notebooks/ tests/ docs/ README.md
+requirements.txt pytest.ini. All src packages have __init__.py.
+
+## Pending decisions for Step 3b / Step 4
+- Step 3b (hyperparameter tuning): start from benchmark baselines.
+  RandomSearch or Bayesian. Recommended: RandomSearch first (cheap),
+  Bayesian refinement if time allows. Deferred until after Step 4 or
+  run in parallel.
+- Step 4 (RQ3): imbalance strategies (none/SMOTE/ADASYN/Tomek/class_weight),
+  calibration (Platt/isotonic), cost-sensitive threshold theta*.
+  Activate R2 test for resampling boundary.
+
+## NEXT: STEP 4 — Imbalance + cost-sensitive threshold (RQ3)
+Scope to present for approval BEFORE writing code:
+1. Benchmark imbalance strategies per window × model (focus on lightgbm
+   and xgboost, which won Step 3):
+   - none (baseline from Step 3)
+   - SMOTE, ADASYN, Tomek Links, class_weight
+   Application: training fold only (Rule 2). Activate R2 test.
+2. Calibration: Platt (sigmoid) and isotonic on the best configurations.
+   Report ECE and Brier for resampled and unresampled.
+3. Cost-sensitive threshold: theta* in [0.1, 0.9] minimizing
+   f_FN(theta)*C_FN + f_FP(theta)*C_FP on validation fold.
+   Primary 5:1; sensitivity 3:1 and 10:1.
+4. Metrics: PR-AUC, Recall, F2, Precision, ROC-AUC, expected_cost,
+   ECE, Brier.
+5. Report in experiments/04_imbalance_cost/ (English).
+Do NOT do SHAP yet (Step 5). Do NOT touch web app (Step 7).
+
+## How to resume
+1. Acknowledge this prompt. Confirm protocol v1.0.11, Step 3 closed,
+   benchmark results in hand.
+2. Present Step 4 scope for approval BEFORE writing code.
+3. Proceed one sub-step at a time; wait for explicit confirmation.

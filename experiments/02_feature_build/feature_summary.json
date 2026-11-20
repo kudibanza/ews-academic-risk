@@ -1,0 +1,54 @@
+{
+  "W2": {
+    "cutoff_days": 14,
+    "rows": 28119,
+    "nulls": {
+      "S_vle": 1691,
+      "D_active": 1691,
+      "H_entropy": 1691,
+      "Delta_t": 26933,
+      "S_score": 26934,
+      "click_trend": 2787
+    },
+    "output": "data/processed/features_W2.parquet"
+  },
+  "W4": {
+    "cutoff_days": 28,
+    "rows": 27538,
+    "nulls": {
+      "S_vle": 921,
+      "D_active": 921,
+      "H_entropy": 921,
+      "Delta_t": 6868,
+      "S_score": 6887,
+      "click_trend": 1273
+    },
+    "output": "data/processed/features_W4.parquet"
+  },
+  "W6": {
+    "cutoff_days": 42,
+    "rows": 27024,
+    "nulls": {
+      "S_vle": 717,
+      "D_active": 717,
+      "H_entropy": 717,
+      "Delta_t": 4236,
+      "S_score": 4254,
+      "click_trend": 1756
+    },
+    "output": "data/processed/features_W6.parquet"
+  },
+  "W8": {
+    "cutoff_days": 56,
+    "rows": 26522,
+    "nulls": {
+      "S_vle": 603,
+      "D_active": 603,
+      "H_entropy": 603,
+      "Delta_t": 3994,
+      "S_score": 4006,
+      "click_trend": 2278
+    },
+    "output": "data/processed/features_W8.parquet"
+  }
+}

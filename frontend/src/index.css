@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+@theme {
+  --color-risk-high: #dc2626;
+  --color-risk-low: #16a34a;
+}
+
+body {
+  @apply bg-gray-50 text-gray-900 antialiased;
+}

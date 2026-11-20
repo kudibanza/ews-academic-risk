@@ -1,0 +1,200 @@
+# RESUME PROMPT — EWS Thesis Project (OULAD) — after Step 5 (final)
+
+## Context
+Master's thesis: "Design and implementation of an Early Warning System for
+Student academic Risk and Dropout Prediction using Machine Learning".
+Author: Kudibanza Afonso Pemba (3820251124), BIT Zhuhai.
+Thesis in English. Chat explanations in Portuguese.
+Workdir: ews-dropout-prediction/ (macOS, Python 3.11.5, .venv active).
+System prerequisites: brew install libomp (for xgboost/lightgbm).
+Libraries: pandas, numpy, scikit-learn (>=1.6, FrozenEstimator),
+xgboost 3.2.0, lightgbm 4.7.0, imbalanced-learn, shap, pyarrow,
+matplotlib, mlflow (pending).
+
+## Working method (STRICT)
+- Step-by-step. One sub-step at a time. Confirm before advancing.
+- Scripts REPORT only; never modify data during audits.
+- All project artefacts in ENGLISH. Chat explanations in PORTUGUESE.
+- Verify before delivering; avoid rework.
+- Deliver ONE recommended version, not alternatives.
+
+## Protocol: config/protocol.yaml v1.0.16
+Sections: §1–§13, §14 output_contract, §16 benchmark_variants,
+§15 change_log (last in file; order 14→16→15 intentional).
+
+### Frozen scientific decisions
+1. Target primary: Withdrawn ∪ Fail vs {Pass, Distinction}.
+   Secondary (EXPLORATORY only): Withdrawn.
+2. Windows: W2=14, W4=28, W6=42, W8=56 (days since course start).
+3. Exclusion: drop at window k iff date_unregistration.notna() AND
+   date_unregistration <= cutoff_k. NEVER depend on date_registration.
+4. Zero-leakage Rules R1–R4 (all active and tested):
+   R1 preprocessing isolation; R2 resampling only train fold;
+   R3 temporal boundary; R4 GroupKFold by student_id. R3+R4 jointly.
+5. Validation: GroupKFold(5) by student_id.
+   Cross-cohort check (train {2013B,2013J} -> test {2014B,2014J})
+   is the NEXT step (Step 6), not yet done.
+6. Imbalance: class_weight selected as best strategy (Step 4).
+   ADASYN failed in W2 (documented, refs [57][58]).
+7. Cost: C_FN:C_FP = 5:1 primary; 3:1 and 10:1 sensitivity.
+8. Selected model: LightGBM + class_weight, uncalibrated.
+   Calibration tested in 4.2 and REJECTED (LightGBM already calibrated,
+   ECE ≈ 0.018; calibration degrades ECE and Brier).
+9. theta* per window at 5:1: W2=0.116, W4=0.120, W6=0.160, W8=0.172.
+10. §14 output contract (v1.0.15): JSONL per (student_id, window,
+    presentation), fields: student_id, presentation, window, model_name,
+    model_version (fold1..fold5), protocol_version, risk_score,
+    threshold_applied, flagged, top_positive_factors (max 5),
+    top_negative_factors (max 5), other_factors_sum, base_value.
+    Invariant: sigmoid(base_value + sum(top5) + other_factors_sum)
+    == risk_score (tolerance 1e-6).
+11. §5 features (7): S_vle, D_active, H_entropy, Delta_t, S_score,
+    still_registered, click_trend.
+12. Scope: ML pipeline + experiments primary; minimal prototype secondary
+    (RQ5). Out: microservices, load testing, prod auth, deployment.
+13. Web app: NOT yet. Own webapp_protocol.yaml at Step 7.
+
+### Key audit facts (Step 1, in §1 audit_notes)
+- studentInfo = 32,593 rows; unique students = 28,785;
+  overlap_rows = 3,808; overlap_students = 3,538. Rule 4 mandatory.
+- studentVle = 10,655,280 rows; studentAssessment = 173,912 rows.
+- modules=7, presentations=4, module-presentations=22.
+- Risk proportion by presentation: 2013B=0.553, 2013J=0.494,
+  2014B=0.570, 2014J=0.515 (~8 pp variation).
+- Max module length 269 d. 25,111 students (87.2%) active by W2.
+- 45 rows null registration AND null unregistration -> INCLUDE.
+
+## Completed steps
+
+### STEP 0 — Contract frozen (v1.0.16)
+
+### STEP 1 — Data audit (closed)
+- 7 CSVs in data/raw/; SHA-256 manifest in checksums_manifest.csv.
+- src/data/checksums.py, src/data/audit_schema.py.
+- experiments/01_data_audit/audit_report.md + audit_summary.json.
+- tests/test_data_schema.py: 16/16 passed.
+
+### STEP 2 — Feature engineering + zero-leakage (closed)
+Sub-step 2.1 — cleaning + exclusion:
+- src/data/cleaning.py -> data/processed/eligibility_W{2,4,6,8}.parquet.
+- Excluded per window: W2=4,474; W4=5,055; W6=5,569; W8=6,071.
+- Eligible per window: W2=28,119; W4=27,538; W6=27,024; W8=26,522.
+- Exclusion decomposition (unregistration date): <0: 2,678; 0–14: 1,796;
+  15–28: 581; 29–42: 514; 43–56: 502; >56: 4,001. Total 10,072.
+- experiments/02_feature_build/cleaning_report.md + cleaning_summary.json.
+
+Sub-step 2.2 — feature engineering:
+- src/features/build_features.py -> data/processed/features_W{2,4,6,8}.parquet.
+- 7 features per §5 (click_trend added v1.0.5).
+- Rows per window match eligible counts exactly.
+- CRITICAL FINDING: in W2, only 1 assessment in all OULAD is due by day 14
+  (id_assessment=15008, BBB, 2014B). Delta_t/S_score coverage ~4% in W2,
+  75% in W4.
+- experiments/02_feature_build/feature_report.md + feature_summary.json.
+
+Sub-step 2.3 — leakage asserts:
+- tests/test_leakage.py (R3, R4); R1, R2 activated in 3.1.
+- experiments/02_feature_build/leakage_report.md.
+
+### STEP 3 — Model benchmarking (closed)
+Sub-step 3.1 — pipeline + metrics + R1/R2 activation:
+- src/models/pipeline.py, src/models/metrics.py, src/models/benchmark.py.
+- pytest.ini added. libomp installed. tests 8/8 passed.
+Sub-step 3.2 — benchmark:
+- 25 runs, 125 fits. results/tables/benchmark_results.csv and summary.
+Sub-step 3.3 — report:
+- experiments/03_model_benchmark/benchmark_report.md.
+Results: lightgbm best in all windows (PR-AUC 0.619/0.694/0.715/0.745).
+Model ranking: lightgbm > xgboost > rf > logreg > dtree.
+W2 A vs B: A marginally better; A retained.
+
+### STEP 4 — Imbalance + calibration + threshold (closed, RQ3)
+Sub-step 4.1 — imbalance benchmark:
+- src/imbalance/benchmark.py. 60 runs, 300 folds (285 valid,
+  15 skipped = ADASYN in W2).
+- results/tables/imbalance_results.csv and imbalance_summary.csv.
+- class_weight selected as best (recall +10–15 pp, PR-AUC unchanged).
+- ADASYN failed in W2 (documented, refs [57][58]).
+- experiments/04_imbalance_cost/imbalance_report.md.
+
+Sub-step 4.2 — calibration:
+- src/imbalance/calibration.py. 180 rows, 36 summary.
+- LightGBM already well calibrated (ECE ≈ 0.018–0.056).
+- Platt and isotonic DEGRADE ECE and Brier. Calibration REJECTED.
+- experiments/04_imbalance_cost/calibration_report.md.
+
+Sub-step 4.3 — cost-sensitive threshold tuning:
+- src/imbalance/threshold.py (LightGBM + XGBoost).
+- 240 rows, 48 summary.
+- At 5:1, recall 0.97–0.998, F2 0.79–0.81, cost halves.
+- theta* at 5:1: W2=0.116, W4=0.120, W6=0.160, W8=0.172 (LightGBM).
+- XGBoost needs lower thresholds (compensates for ECE).
+- At theta*, models converge on cost (0.9–2.4% difference).
+- results/tables/threshold_results.csv and threshold_summary.csv.
+- imbalance_report.md extended with 4.3 section.
+
+### STEP 5 — SHAP caching (closed, RQ4)
+Sub-step 5.1 — out-of-fold SHAP:
+- src/explain/shap_cache.py.
+- 5 models per window (one per GroupKFold fold); each student explained
+  by the model that did not see them in training.
+- 109,203 artifacts in results/shap_artifacts/{W2,W4,W6,W8}/
+  {2013B,2013J,2014B,2014J}.jsonl (16 files).
+- §14 schema with other_factors_sum (added v1.0.15).
+
+Sub-step 5.2 — contract validation:
+- tests/test_shap_contract.py: 13/13 passed.
+- Exact reconstruction: sigmoid(base + sum(top5) + other_factors_sum)
+  == risk_score (tolerance 1e-6).
+- experiments/05_shap/shap_validation_report.md (or section in
+  shap_report.md).
+
+Sub-step 5.3 — global analysis + report:
+- src/explain/shap_analysis.py.
+- results/tables/shap_importance.csv (24 rows),
+  shap_flagged_counts.csv (4 rows).
+- results/figures/shap_importance_by_window.png.
+- experiments/05_shap/shap_report.md.
+KEY FINDINGS:
+- Signal migrates from S_vle in W2 (mean |SHAP| 0.471) to S_score in W8
+  (0.661) and D_active (0.437).
+- Delta_t rises from 0.013 (W2) to 0.263 (W8).
+- click_trend contributes 0.117–0.236.
+- Flagged rate at θ* (5:1): 99.5% (W2) → 87.8% (W8).
+  Operational implication: 99.5% flagged in W2 is not actionable;
+  institution may prefer 3:1 ratio (θ* ≈ 0.26) for a more selective alert.
+- Limitation: global importance uses top-5 factors only;
+  other_factors_sum aggregates the rest.
+
+### References added during Step 4
+[57] D. Agustini et al., 2026 iSemantic, pp. 275–282,
+doi: 10.1109/iSemantic71495.2026.11742853.
+[58] I. M. Putrama and P. Martinek, Computers, Materials & Continua,
+83(3), 5699–5727, 2025, doi: 10.32604/cmc.2025.063465.
+
+## Folder structure (frozen)
+config/ data/{raw,interim,processed}/ src/{data,features,models,
+imbalance,explain,utils}/ experiments/{01_data_audit,02_feature_build,
+03_model_benchmark,04_imbalance_cost,05_shap,06_cross_cohort}/
+results/{tables,figures,mlflow,shap_artifacts}/ notebooks/ tests/ docs/
+README.md requirements.txt pytest.ini. All src packages have __init__.py.
+
+## NEXT: STEP 6 — Cross-cohort generalization
+Scope to present for approval BEFORE writing code:
+1. Train final LightGBM + class_weight on the 2013 presentations
+   (2013B + 2013J) for each window, no retraining afterward.
+2. Evaluate on the 2014 presentations (2014B + 2014J) without
+   retraining and without threshold recalibration (use the same
+   theta* from 4.3).
+3. Report delta PR-AUC, delta Recall, delta F2, delta expected cost
+   vs. the GroupKFold results from Steps 3–4.
+4. Verify that the student-level group isolation is preserved:
+   no student appears in both 2013 and 2014 sets.
+5. Report in experiments/06_cross_cohort/ (English).
+Do NOT touch web app (Step 7).
+
+## How to resume
+1. Acknowledge this prompt. Confirm protocol v1.0.16, Step 5 closed,
+   selected configuration and theta* frozen.
+2. Present Step 6 scope for approval BEFORE writing code.
+3. Proceed one sub-step at a time; wait for explicit confirmation.

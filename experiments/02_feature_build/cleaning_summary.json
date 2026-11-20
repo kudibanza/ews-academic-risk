@@ -1,0 +1,35 @@
+{
+  "total_rows": 32593,
+  "W2": {
+    "cutoff_days": 14,
+    "rows": 32593,
+    "excluded": 4474,
+    "eligible": 28119,
+    "eligible_pct": 0.8627,
+    "output": "data/processed/eligibility_W2.parquet"
+  },
+  "W4": {
+    "cutoff_days": 28,
+    "rows": 32593,
+    "excluded": 5055,
+    "eligible": 27538,
+    "eligible_pct": 0.8449,
+    "output": "data/processed/eligibility_W4.parquet"
+  },
+  "W6": {
+    "cutoff_days": 42,
+    "rows": 32593,
+    "excluded": 5569,
+    "eligible": 27024,
+    "eligible_pct": 0.8291,
+    "output": "data/processed/eligibility_W6.parquet"
+  },
+  "W8": {
+    "cutoff_days": 56,
+    "rows": 32593,
+    "excluded": 6071,
+    "eligible": 26522,
+    "eligible_pct": 0.8137,
+    "output": "data/processed/eligibility_W8.parquet"
+  }
+}

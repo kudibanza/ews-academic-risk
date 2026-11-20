@@ -1,0 +1,10 @@
+import pandas as pd
+reg = pd.read_csv('data/raw/studentRegistration.csv')
+u = reg['date_unregistration'].dropna()
+print('Total with date_unregistration:', len(u))
+print('Negative (before day 0):', int((u < 0).sum()))
+print('Between 0 and 14:', int(((u >= 0) & (u <= 14)).sum()))
+print('Between 15 and 28:', int(((u > 14) & (u <= 28)).sum()))
+print('Between 29 and 42:', int(((u > 28) & (u <= 42)).sum()))
+print('Between 43 and 56:', int(((u > 42) & (u <= 56)).sum()))
+print('After 56:', int((u > 56).sum()))

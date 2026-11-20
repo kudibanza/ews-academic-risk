@@ -1,0 +1,601 @@
+# ============================================================
+# PROTOCOL CONTRACT — Early Warning System (EWS)
+# Frozen before any experiment.
+# Any change requires a new version + written justification.
+# ============================================================
+protocol_version: "1.0.1"
+frozen_date: "2026-11-09"
+author: "Kudibanza Afonso Pemba (3820251124)"
+
+# ---------- 1. DATASET ----------
+dataset:
+  name: "OULAD"
+  source: "Kuzilek, Hlosta & Zdrahal (2017), Scientific Data 4:170171"
+  doi: "10.1038/sdata.2017.171"
+  files_required:
+    - "courses.csv"
+    - "assessments.csv"
+    - "vle.csv"
+    - "studentAssessment.csv"
+    - "studentVle.csv"
+    - "studentInfo.csv"
+    - "studentRegistration.csv"
+  integrity:
+    checksum_algorithm: "sha256"
+    checksums_recorded: true
+    manifest: "data/raw/checksums_manifest.csv"
+    note: >
+      Checksums recorded 2026-11-09 from the local copy of OULAD.
+      UCI does not publish per-file SHA-256 values, so these hashes
+      serve as the local integrity baseline for all downstream steps.
+      Any future re-download must reproduce these values or trigger
+      a protocol version bump.
+  presentations:
+    train: ["2013B", "2013J"]
+    test:  ["2014B", "2014J"]   # cross-cohort generalization check
+  audit_notes:
+    unique_students: 28785
+    student_module_presentation_rows: 32593
+    overlap_rows: 3808          # rows - unique students
+    overlap_students: 3538      # students with >1 row
+    note: >
+      Two distinct quantities must not be conflated. overlap_rows = 3,808
+      is the number of excess rows (32,593 - 28,785). overlap_students =
+      3,538 is the number of distinct students appearing in more than one
+      module presentation. The difference (3,808 vs 3,538) arises because
+      some students appear in 3+ presentations. Rule 4 (student-level group
+      isolation) is mandatory either way: 3,538 students would leak across
+      folds under a naive random split.
+    target_stability:
+      risk_proportion_by_presentation:
+        "2013B": 0.553
+        "2013J": 0.494
+        "2014B": 0.570
+        "2014J": 0.515
+      note: >
+        Risk proportion varies by ~8 percentage points across
+        presentations. The cross-cohort check (train 2013, test 2014)
+        must be interpreted with this variation in mind.
+    temporal:
+      max_module_length_days: 269
+      students_with_vle_activity_by_W2: 25111
+      coverage_W2: "87.2% of unique students"
+    canonical_counts_verified:
+      studentVle_rows: 10655280
+      studentAssessment_rows: 173912
+      modules: 7
+      presentations: 4
+      module_presentations: 22
+    schema_validation:
+      pytest_passed: 16
+      pytest_failed: 0
+      report: "experiments/01_data_audit/audit_report.md"
+      summary: "experiments/01_data_audit/audit_summary.json"
+
+# ---------- 2. TARGET ----------
+target:
+  primary:
+    name: "academic_risk"
+    definition: "1 if final_result in {'Withdrawn', 'Fail'} else 0"
+    rationale: >
+      Combined target because the operational cost of a false negative
+      (a student who either withdraws OR fails) is identical from the
+      coordinator's perspective. Avoids fragmenting the positive class
+      at early windows (W2), where minority-class insufficiency is
+      already critical.
+    class_balance_note: "report counts per window and per presentation"
+  secondary_exploratory:
+    name: "dropout_only"
+    definition: "1 if final_result == 'Withdrawn' else 0"
+    status: "EXPLORATORY — not pre-registered for primary decisions"
+    purpose: "discussion analysis; same pipeline, same features"
+
+# ---------- 3. TEMPORAL WINDOWS ----------
+temporal_windows:
+  unit: "days_since_course_start"
+  cutoffs:
+    W2: 14
+    W4: 28
+    W6: 42
+    W8: 56
+  rule: "activity_date <= cutoff_days"
+  rationale: "full academic weeks; aligned with Zhang & Duan (2026)"
+
+# ---------- 4. OPERATIONAL EXCLUSION ----------
+exclusion_rule:
+  condition: "date_unregistration.notna() AND date_unregistration <= cutoff_days(window)"
+  action: "EXCLUDE from sample at that window (do not label as negative)"
+  rationale: >
+    Prevents two leakage pathways: (i) absence of later activity being
+    misread as 'at-risk but still enrolled'; (ii) date_unregistration
+    close to the cutoff acting as a near-trivial proxy for the outcome.
+  students_unregistering_after_cutoff: "retain in sample (still active)"
+  independence_from_registration_date: >
+    The exclusion condition depends ONLY on date_unregistration, never
+    on date_registration. Students with null date_registration but
+    non-null date_unregistration are excluded by the same rule. This
+    prevents a leakage pathway where requiring date_registration.notna()
+    would silently retain students who had already left.
+
+# ---------- 4.1 EDGE CASES (from data audit) ----------
+edge_cases:
+  negative_unregistration_dates:
+    observed: "date_unregistration ranges from -365 to 444 days"
+    interpretation: >
+      Negative values indicate withdrawal before the official course
+      start. These students are correctly excluded at every window by
+      the rule above.
+    action: "no special handling; the standard exclusion rule applies"
+  null_registration_with_null_unregistration:
+    observed: "45 rows in studentRegistration.csv"
+    interpretation: >
+      Students with neither a registration nor an unregistration date.
+      They have a final_result recorded, so they belong to the target
+      population. There is no evidence of withdrawal.
+    action: "INCLUDE in sample at all windows"
+    rationale: >
+      Excluding them would introduce unjustified selection bias.
+      Their missing date_registration does not affect the exclusion
+      rule, which depends only on date_unregistration.
+  integer_encoding:
+    observed: "date_registration and date_unregistration stored as float64 by pandas"
+    verification: "no fractional values in either column (audit confirmed)"
+    action: "convert to pandas nullable Int64 in Step 2"
+
+# ---------- 5. FEATURES (per window, cumulative) ----------
+features:
+  - name: "S_vle"
+    source: "studentVle.sum_click"
+    definition: "cumulative sum of clicks up to the cutoff"
+  - name: "D_active"
+    source: "studentVle.date"
+    definition: "number of distinct days with >=1 click up to the cutoff"
+  - name: "H_entropy"
+    source: "vle.activity_type × studentVle"
+    definition: "Shannon entropy over 20 categories; H in [0, log2(20)]"
+    formula: "H = -sum(p_c * log2(p_c))"
+  - name: "Delta_t"
+    source: "studentAssessment.date_submitted - assessments.date"
+    definition: "mean submission latency (days) for assessments due by the cutoff"
+  - name: "S_score"
+    source: "studentAssessment.score"
+    definition: "mean score across assessments submitted by the cutoff"
+  - name: "still_registered"
+    source: "studentRegistration.date_unregistration"
+    definition: "binary flag: 1 if still registered at the cutoff"
+    note: "after operational exclusion, this flag is always 1 in the sample — document it"
+  - name: "click_trend"
+    source: "studentVle.sum_click"
+    definition: >
+      Mean daily clicks in the two most recent weeks up to the cutoff,
+      minus mean daily clicks in the two weeks immediately preceding them.
+      For W2, uses week 2 minus week 1 (only one preceding week available).
+    formula: >
+      click_trend(w_k) = mean_daily_clicks(w_{k-2}..w_k)
+                        - mean_daily_clicks(w_{k-4}..w_{k-2})
+    windows_available: ["W4", "W6", "W8"]   # W2 uses a reduced form
+    w2_reduced_form: "mean_daily_clicks(week 2) - mean_daily_clicks(week 1)"
+    rationale: >
+      Captures the direction of engagement. Cumulative features cannot
+      distinguish a student who clicked 100 times in week 1 then stopped
+      from one who clicked 100 times in week 3 and is accelerating.
+      Disengagement trajectory is a documented early-warning signal in
+      OULAD-based studies.
+    leakage_note: "uses only activity with date <= cutoff_k (Rule 3)"  
+
+# ---------- 6. ZERO-LEAKAGE INVARIANTS ----------
+zero_leakage:
+  rule_1_preprocessing_isolation: >
+    Imputers and scalers are fit ONLY on the training fold of each CV
+    split; applied without refitting to validation and test folds.
+  rule_2_resampling_boundary: >
+    SMOTE/ADASYN/Tomek ONLY after the split, ONLY on the training fold.
+    Test folds are never resampled; evaluated on their natural distribution.
+  rule_3_temporal_boundary: >
+    Cumulative features for W_k use only records with date <= cutoff_k,
+    computed per student, BEFORE any split.
+  rule_4_student_group_isolation: >
+    CV folds are constructed at the student_id level (GroupKFold).
+    No student_id appears in more than one fold.
+    Applied JOINTLY with rule_3 (temporal AND group boundary).
+  verification:
+    - "assert: no student_id appears in both train and test"
+    - "assert: max(feature_date) <= cutoff for each window"
+    - "assert: scaler statistics fit on training fold only"
+
+# ---------- 6.1 LEAKAGE REFERENCES ----------
+leakage_references:
+  rule_1_preprocessing:
+    - "Kapoor & Narayanan (2023), Patterns 4(9):100804, doi:10.1016/j.patter.2023.100804"
+  rule_2_resampling:
+    - "Kapoor & Narayanan (2023), Patterns 4(9):100804, doi:10.1016/j.patter.2023.100804"
+    - "Mduma (2023), Data 8(3):49, doi:10.3390/data8030049"
+  rule_3_temporal:
+    - "Barros et al. (2023), arXiv:2305.08600"
+    - "Zhang & Duan (2026), Scientific Reports, doi:10.1038/s41598-026-68508-4"
+  rule_4_student_group:
+    - "Zhang & Duan (2026), Scientific Reports, doi:10.1038/s41598-026-68508-4"
+    
+# ---------- 7. VALIDATION PROTOCOL ----------
+validation:
+  primary_cv:
+    method: "GroupKFold"
+    n_splits: 5
+    group: "student_id"
+    stratify_note: "check class proportion per fold; report it"
+  cross_cohort_check:
+    method: "train on {2013B,2013J} -> test on {2014B,2014J}"
+    retraining: false
+    threshold_recalibration: false
+    report: "delta AUC and delta PR-AUC vs. CV"
+
+# ---------- 8. CLASS IMBALANCE STRATEGIES (benchmark) ----------
+imbalance:
+  strategies:
+    - "none (baseline)"
+    - "SMOTE"
+    - "ADASYN"
+    - "Tomek Links (undersampling)"
+    - "class_weight (ratio non-dropout:dropout)"
+  application: "training fold only (rule_2)"
+  calibration:
+    methods: ["Platt (sigmoid)", "isotonic"]
+    applied_to: "final classifiers before threshold tuning"
+    metrics: ["ECE", "Brier score"]
+
+# ---------- 9. COST-SENSITIVE THRESHOLD ----------
+cost_sensitive:
+  primary_ratio: "C_FN : C_FP = 5 : 1"
+  sensitivity_ratios: ["3:1", "10:1"]
+  threshold_search:
+    range: [0.1, 0.9]
+    step: 0.01
+    objective: "argmin_theta [ f_FN(theta)*C_FN + f_FP(theta)*C_FP ]"
+    data: "validation fold (not test)"
+  cost_matrix:
+    TN: 0
+    FP: 1
+    FN: 5
+    TP: 0
+
+# ---------- 10. MODELS (benchmark) ----------
+models:
+  baselines: ["LogisticRegression", "DecisionTree"]
+  ensembles: ["RandomForest", "XGBoost", "LightGBM"]
+  tuning:
+    methods: ["RandomSearch", "BayesianOptimization"]
+    search_space: "defined in Step 3; logged under experiments/"
+  hyperparameter_validation: "training fold only (nested CV if required)"
+
+# ---------- 11. METRICS ----------
+metrics:
+  primary: ["PR-AUC", "Recall", "F2"]
+  secondary: ["Precision", "ROC-AUC", "ECE", "Brier", "expected_cost"]
+  reporting:
+    - "mean ± standard deviation across CV folds"
+    - "per window (W2, W4, W6, W8)"
+    - "per model"
+    - "cross-cohort: delta vs. CV"
+  threshold_for_recall_target: "0.85 (design choice; report as such)"
+
+# ---------- 12. REPRODUCIBILITY ----------
+reproducibility:
+  global_seed: 42
+  python_version: "3.10+"
+  libraries:
+    pandas: "pin"
+    numpy: "pin"
+    scikit-learn: "pin"
+    xgboost: "pin"
+    lightgbm: "pin"
+    imbalanced-learn: "pin"
+    shap: "pin"
+    mlflow: "pin"
+  tracking: "MLflow (runs, params, artifacts, feature lineage)"
+  environment: "requirements.txt + conda env export"
+  system_prerequisites:
+    macOS:
+      - "brew install libomp  # required by xgboost and lightgbm (OpenMP runtime)"
+
+# ---------- 13. SCOPE BOUNDARY ----------
+scope:
+  primary_deliverable: "ML pipeline + experiments (RQ1–RQ4)"
+  secondary_deliverable: "minimal prototype (RQ5) — validation vehicle, not production"
+  out_of_scope: ["microservices", "load testing", "production authentication", "institutional deployment"]
+
+# ---------- 14. OUTPUT CONTRACT (SHAP artifacts) ----------
+# NOTE: this contract fixes only the OUTPUT SCHEMA of the ML pipeline.
+# The serving/UI contract (endpoints, latency, authentication, SCS)
+# will be frozen in a separate webapp_protocol.yaml at Step 7.
+output_contract:
+  grain: "one record per (student_id, window, presentation)"
+  format: "JSON Lines (.jsonl), one object per line"
+  schema:
+    student_id: "int"
+    presentation: "str  # e.g. '2013B'"
+    window: "str  # 'W2' | 'W4' | 'W6' | 'W8'"
+    model_name: "str  # e.g. 'xgboost'"
+    model_version: "str  # joblib artifact hash"
+    protocol_version: "str  # '1.0.1'"
+    risk_score: "float  # calibrated probability, [0,1]"
+    threshold_applied: "float  # theta* for the primary cost ratio (5:1)"
+    flagged: "bool  # risk_score >= threshold_applied"
+    top_positive_factors:
+      type: "list[dict]"
+      item_schema:
+        feature: "str"
+        shap_value: "float  # positive contribution (increases risk)"
+        feature_value: "float | str"
+      ordering: "descending by shap_value"
+      max_items: 5
+    top_negative_factors:
+      type: "list[dict]"
+      item_schema:
+        feature: "str"
+        shap_value: "float  # negative contribution (reduces risk)"
+        feature_value: "float | str"
+      ordering: "ascending by shap_value"
+      max_items: 5
+    base_value: "float  # SHAP explainer expected value"
+  invariants:
+    - "risk_score in [0,1]"
+    - "flagged == (risk_score >= threshold_applied)"
+    - "top_positive_factors and top_negative_factors have opposite signs"
+    - "sum(shap_values) + base_value ≈ risk_score (log-odds or probability; document)"
+    - "no artifact is emitted for students excluded by the operational rule (§4)"
+  storage:
+    location: "results/shap_artifacts/{window}/{presentation}.jsonl"
+    index: "PostgreSQL table shap_cache (student_id, window, presentation) — Step 7 only"
+  consumers:
+    - "offline analysis (RQ4)"
+    - "web prototype (RQ5) — via webapp_protocol.yaml at Step 7"
+  change_policy: >
+    Schema changes require a new protocol_version and full regeneration
+    of artifacts. The schema is never altered mid-analysis.
+  other_factors_sum: >
+      float  # sum of SHAP values not captured in top_positive_factors
+             # or top_negative_factors. Enables exact reconstruction:
+             # sigmoid(base_value + sum(top5) + other_factors_sum) == risk_score
+
+# ---------- 16. BENCHMARK VARIANTS ----------
+benchmark_variants:
+  W2_assessment_features:
+    variant_A: "retain Delta_t and S_score with training-fold imputation"
+    variant_B: "drop Delta_t and S_score in W2 only"
+    selection_criterion: "PR-AUC and F2 at W2; report both"
+    rationale: >
+      Only 1 assessment in all OULAD is due by day 14 (id_assessment=15008,
+      module BBB, 2014B). Coverage of assessment features in W2 is ~4%.
+      Variant B tests whether these near-constant features add signal or
+      noise. The comparison is an empirical contribution, not an a priori
+      choice.
+  tuning_order:
+    step_3: "benchmark with default hyperparameters"
+    step_3b: "hyperparameter tuning (RandomSearch / Bayesian)"
+
+# ---------- 15. CHANGE LOG ----------
+change_log:
+  - version: "1.0.0"
+    date: "2026-11-09"
+    changes: "initial frozen version (§1–§13)"
+
+  - version: "1.0.1"
+    date: "2026-11-09"
+    changes: >
+      Added §14 output_contract (SHAP artifact schema) before advancing
+      to Step 1. No scientific decision in §1–§13 was altered.
+      webapp_protocol.yaml reserved for Step 7.
+      change_log renumbered from §14 to §15.
+
+  - version: "1.0.2"
+    date: "2026-11-09"
+    changes: >
+      §1 integrity updated: checksums recorded and manifest path set
+      (data/raw/checksums_manifest.csv). No scientific decision altered.
+
+  - version: "1.0.3"
+    date: "2026-11-10"
+    changes: >
+      Step 1 audit completed. §1 audit_notes added: unique students
+      (28,785) vs. student-module-presentation rows (32,593), target
+      stability across presentations, temporal coverage. §4 exclusion
+      rule clarified: depends only on date_unregistration, never on
+      date_registration. §4.1 edge cases added: negative unregistration
+      dates (standard rule applies), null registration with null
+      unregistration (include in sample), integer encoding (convert to
+      Int64 in Step 2). No primary scientific decision altered.
+
+  - version: "1.0.4"
+    date: "2026-11-10"
+    changes: >
+      Added Kapoor & Narayanan (2023), DOI 10.1016/j.patter.2023.100804,
+      to the reference base. Cited in justification of Rule 1
+      (preprocessing isolation) and Rule 2 (resampling boundary) as a
+      taxonomy of leakage types in ML-based science. No scientific
+      decision altered.
+
+  - version: "1.0.5"
+    date: "2026-11-11"
+    changes: >
+      §5 feature list extended with click_trend (engagement trajectory).
+      Rationale: cumulative features cannot capture disengagement
+      direction; trajectory is a documented OULAD early-warning signal.
+      W2 uses a reduced form (week 2 minus week 1). No leakage rule
+      altered. Sub-step 2.2 scope updated accordingly.
+
+  - version: "1.0.6"
+    date: "2026-11-11"
+    changes: >
+      Sub-step 2.2 closed. Feature coverage documented: Delta_t and
+      S_score have ~4% coverage in W2 (only 1 assessment due by day 14
+      in the entire OULAD), rising to 75% in W4. No leakage rule
+      altered. Decision on whether to retain these features in W2
+      deferred to Step 3.
+
+  - version: "1.0.7"
+    date: "2026-11-11"
+    changes: >
+      §1 audit_notes corrected: overlap_rows (3,808) and overlap_students
+      (3,538) are now distinguished explicitly. The previous single field
+      "overlap_students: 3808" conflated the two. No leakage rule or
+      scientific decision altered. Sub-step 2.3 test corrected to verify
+      both quantities dynamically.
+
+  - version: "1.0.8"
+    date: "2026-11-11"
+    changes: >
+      Sub-step 2.3 closed. tests/test_leakage.py: 6 passed, 2 skipped
+      (R1, R2 deferred to Step 3). R3 and R4 verified against processed
+      data. leakage_report.md written. No scientific decision altered.
+
+  - version: "1.0.9"
+    date: "2026-11-11"
+    changes: >
+      Added §16 benchmark_variants (placed before §15 change_log to keep
+      the change log at the end of the file without renumbering).
+      Frozen Step 3 decisions:
+      (a) W2 assessment features tested under Variant A (retain Delta_t
+      and S_score with training-fold imputation) and Variant B (drop
+      both in W2 only; coverage ~4%, documented in feature_report.md).
+      Selection based on PR-AUC and F2 at W2; both reported.
+      (b) Tuning order: benchmark with default hyperparameters in Step 3,
+      hyperparameter tuning in Step 3b.
+      No leakage rule altered.
+
+  - version: "1.0.10"
+    date: "2026-11-12"
+    changes: >
+      Sub-step 3.1 closed. src/models/pipeline.py and metrics.py created.
+      R1 and R2 leakage tests activated and passing (8/8 total).
+      pytest.ini added. libomp documented as macOS system prerequisite
+      for xgboost/lightgbm. No scientific decision altered.
+
+  - version: "1.0.11"
+    date: "2026-11-13"
+    changes: >
+      Sub-step 3.2 and 3.3 closed. Benchmark executed: 25 runs, 125 fits.
+      LightGBM best in all windows (PR-AUC 0.619 / 0.694 / 0.715 / 0.745).
+      W2 variant A marginally better than B (+0.003 to +0.011 PR-AUC);
+      Variant A retained as primary for W2. Temporal monotonic improvement
+      confirmed. Baseline for Step 4 established (recall ~0.58 at 0.5).
+      benchmark_report.md written. No scientific decision altered.
+
+  - version: "1.0.12"
+    date: "2026-11-14"
+    changes: >
+      Sub-step 4.1 closed. Imbalance benchmark executed: 60 runs, 300 folds
+      (285 valid, 15 skipped). class_weight identified as best strategy
+      (recall +10–15 pp, PR-AUC unchanged). Tomek maximises recall but
+      loses PR-AUC. SMOTE redundant over class_weight. ADASYN failed in
+      W2 across all models (structural limitation, documented). Primary
+      configuration for 4.2/4.3: lightgbm + class_weight. 
+  
+  - version: "1.0.13"
+    date: "2026-11-15"
+    changes: >
+      Sub-step 4.2 closed. Calibration evaluated for lightgbm+class_weight,
+      xgboost+class_weight, and lightgbm+none, using Platt (sigmoid) and
+      isotonic, fit on the training fold via FrozenEstimator.
+      Key finding: the uncalibrated LightGBM is already well calibrated
+      (ECE ≈ 0.018–0.056); both calibration methods degrade ECE and
+      Brier, and isotonic marginally reduces PR-AUC. XGBoost+class_weight
+      has higher ECE and is worsened by calibration (scale_pos_weight
+      distorts probabilities).
+      Decision: calibration NOT applied for sub-step 4.3. Selected
+      configuration: LightGBM + class_weight, uncalibrated. This is a
+      tested-and-rejected design choice, documented in
+      experiments/04_imbalance_cost/calibration_report.md.
+      No leakage rule altered.
+
+  - version: "1.0.14"
+    date: "2026-11-15"
+    changes: >
+      Sub-step 4.3 closed and Step 4 complete (RQ3). Cost-sensitive
+      threshold tuning executed for LightGBM + class_weight and
+      XGBoost + class_weight (both uncalibrated), at ratios 5:1 (primary),
+      3:1, and 10:1. At 5:1, recall rises to 0.97–0.998, F2 to 0.79–0.81,
+      and expected cost roughly halves versus threshold 0.5. XGBoost
+      requires lower thresholds than LightGBM, compensating for its
+      compressed probability scale; this validates the 4.2 decision to
+      skip calibration. At theta*, the two models converge on operational
+      cost (0.9–2.4% difference). Primary configuration for Step 5:
+      LightGBM + class_weight, uncalibrated, theta* per window at 5:1.
+      Results in results/tables/threshold_results.csv and
+      threshold_summary.csv. imbalance_report.md extended with 4.3 section.
+      No leakage rule altered.
+
+  - version: "1.0.15"
+    date: "2026-11-16"
+    changes: >
+      §14 output_contract extended with other_factors_sum (float):
+      sum of SHAP values not captured in the top-5 positive and top-5
+      negative factor lists. This enables exact probability
+      reconstruction: sigmoid(base_value + sum(top5) + other_factors_sum)
+      == risk_score (tolerance 1e-6). The previous schema stored only
+      top-5 factors per side, which made reconstruction approximate
+      (residual up to ~1.1 pp for students with many contributing
+      factors). Validation test updated accordingly. Artifacts
+      regenerated. No leakage rule altered.
+
+  - version: "1.0.16"
+    date: "2026-11-16"
+    changes: >
+      Step 5 closed (RQ4). Out-of-fold SHAP generated for 109,203
+      student-window records. Contract validated: 13/13 tests passed.
+      Global importance analysis: signal migrates from S_vle in W2
+      (mean |SHAP| 0.471) to S_score in W8 (0.661) and D_active (0.437);
+      Delta_t rises from 0.013 (W2) to 0.263 (W8); click_trend
+      contributes 0.117–0.236. Flagged rate at θ* (5:1) is 99.5% in W2
+      and 87.8% in W8; operational implication documented. Figure and
+      CSVs written. shap_report.md written. No leakage rule altered.
+
+  - version: "1.0.17"
+    date: "2026-11-16"
+    changes: >
+      Step 6 closed (cross-cohort generalization). Trained on 2013B+2013J,
+      tested on 2014B+2014J, no retraining, no threshold recalibration.
+      Students appearing in both 2013 and 2014 removed from test
+      (1,236–1,445 per window, ~9% of test) to guarantee strictly
+      out-of-cohort evaluation (Rule 4 preserved).
+      Results: PR-AUC drops by 0.05–0.10 vs GroupKFold (W2: 0.619→0.570;
+      W4: 0.694→0.604; W6: 0.715→0.620; W8: 0.745→0.646). Recall is
+      essentially unchanged (0.956–0.998): the theta* optimized on 2013
+      generalizes to 2014 without recalibration. F2 drops slightly
+      (0.79→0.78). Expected cost rises in absolute terms but cost per
+      student is comparable.
+      Limitation documented: in W2, Delta_t and S_score have no observed
+      values in the 2013 training set (only 1 assessment in all OULAD is
+      due by day 14, and it belongs to 2014B). The W2 cross-cohort model
+      is therefore VLE-only; the W4–W8 gaps are the cleaner estimate of
+      cohort shift. cross_cohort_report.md written.
+      No leakage rule altered.
+
+  - version: "1.0.18"
+    date: "2026-11-16"
+    changes: >
+      Clarification: Passo 6 was planned with three sub-steps (6.1 script,
+      6.2 comparison, 6.3 report). In execution, 6.2 (comparison metrics)
+      and 6.3 (report + CSVs) were delivered together in
+      cross_cohort_report.md and the two CSV files. No content missing.
+      Step 6 complete.
+
+  - version: "1.0.19"
+    date: "2026-11-16"
+    changes: >
+      Step 3b (hyperparameter tuning) formally deferred to future work.
+      Rationale: protocol §16 freezes the order "benchmark first, tuning
+      later"; the default-hyperparameter benchmark (Step 3) is the
+      pre-registered protocol and is reproducible and comparable with the
+      literature; tuning is an optimisation, not a prerequisite for the
+      validity of Steps 4–6. Re-running tuning now would risk cascading
+      re-execution of 4.1, 4.3, and 5.1 without proportional scientific
+      gain. Step 3b is documented in the thesis as identified future work,
+      not as an accidental omission.
+
+  - version: "1.1.1"
+    date: "2026-11-18"
+    changes: >
+      Step 7.3 closed. Web prototype fully implemented (backend + frontend).
+      Admin dashboard, user management, and SCS survey integrated.
+      webapp_report.md and scs_protocol.md written. SCS evaluation
+      ready to be conducted with 3-6 coordinators. No leakage rules altered.

@@ -1,0 +1,136 @@
+# RESUME PROMPT — EWS Thesis Project (OULAD) — after Step 2 (final)
+
+## Context
+Master's thesis: "Design and implementation of an Early Warning System for
+Student academic Risk and Dropout Prediction using Machine Learning".
+Author: Kudibanza Afonso Pemba (3820251124), BIT Zhuhai.
+Thesis in English. Chat explanations in Portuguese.
+Workdir: ews-dropout-prediction/ (macOS, Python 3.11.5, .venv active).
+pyarrow installed (Parquet support).
+
+## Working method (STRICT)
+- Step-by-step. One sub-step at a time. Confirm before advancing.
+- Scripts REPORT only; never modify data during audits.
+- All project artefacts in ENGLISH. Chat explanations in PORTUGUESE.
+- Verify before delivering; avoid rework.
+
+## Protocol: config/protocol.yaml v1.0.9
+Sections: §1–§13, §14 output_contract, §16 benchmark_variants,
+§15 change_log (last in file; order 14→16→15 is intentional to keep
+change_log at the end without renumbering).
+
+### Frozen scientific decisions
+1. Target primary: Withdrawn ∪ Fail vs {Pass, Distinction}.
+   Secondary (EXPLORATORY only): Withdrawn.
+2. Windows: W2=14, W4=28, W6=42, W8=56 (days since course start).
+3. Exclusion: drop at window k iff date_unregistration.notna() AND
+   date_unregistration <= cutoff_k. NEVER depend on date_registration.
+4. Zero-leakage Rules R1–R4:
+   R1 preprocessing isolation (fit only on train fold);
+   R2 resampling only train fold after split;
+   R3 temporal boundary (features use date <= cutoff, computed before split);
+   R4 GroupKFold by student_id. R3+R4 jointly.
+5. Validation: GroupKFold(5) by student_id; cross-cohort train
+   {2013B,2013J} -> test {2014B,2014J}, no retraining, no threshold recalib.
+6. Imbalance: none/SMOTE/ADASYN/Tomek/class_weight; calibrate Platt or
+   isotonic; report ECE, Brier.
+7. Cost: C_FN:C_FP = 5:1 primary; 3:1 and 10:1 sensitivity. theta in
+   [0.1,0.9] step 0.01, minimize expected cost on validation fold.
+8. Models: LogReg, DecisionTree; RF, XGBoost, LightGBM.
+9. Metrics: PR-AUC, Recall, F2 (primary); Precision, ROC-AUC, ECE, Brier,
+   expected_cost (secondary). Seed 42. MLflow.
+10. §14 output: JSONL, one record per (student_id, window, presentation)
+    with risk_score, threshold_applied, flagged, top_positive_factors,
+    top_negative_factors, base_value; stored results/shap_artifacts/.
+11. §5 features (7): S_vle, D_active, H_entropy, Delta_t, S_score,
+    still_registered, click_trend.
+12. §16 benchmark variants (FROZEN):
+    - W2 Variant A: retain Delta_t and S_score with training-fold
+      imputation.
+    - W2 Variant B: drop Delta_t and S_score in W2 only.
+    - Selection: PR-AUC and F2 at W2; both reported.
+    - Tuning order: benchmark with default hyperparameters (Step 3);
+      hyperparameter tuning in Step 3b.
+13. Scope: ML pipeline + experiments primary; minimal prototype secondary
+    (RQ5). Out: microservices, load testing, prod auth, deployment.
+14. Web app: NOT yet. Own webapp_protocol.yaml at Step 7.
+
+### Key audit facts (Step 1, in §1 audit_notes, corrected in v1.0.7)
+- studentInfo = 32,593 rows; unique students = 28,785;
+  overlap_rows = 3,808 (rows − unique); overlap_students = 3,538 (>1 row).
+  Rule 4 mandatory.
+- studentVle = 10,655,280 rows (canonical exact).
+- studentAssessment = 173,912 rows (canonical exact).
+- modules=7, presentations=4, module-presentations=22.
+- Risk proportion (Withdrawn∪Fail) by presentation:
+  2013B=0.553, 2013J=0.494, 2014B=0.570, 2014J=0.515 (~8 pp variation).
+- Max module length 269 d. 25,111 students (87.2%) active by W2.
+- date_registration: 45 nulls. date_unregistration: 10,072 non-null,
+  22,521 null; range −365..444. Both float64, no fractional values,
+  converted to Int64.
+- 45 rows null registration AND null unregistration -> INCLUDE in sample.
+
+## Completed steps
+
+### STEP 0 — Contract frozen (v1.0.9)
+
+### STEP 1 — Data audit (closed)
+- data/raw/ has 7 CSVs; checksums in checksums_manifest.csv (SHA-256).
+- src/data/checksums.py, src/data/audit_schema.py.
+- experiments/01_data_audit/audit_report.md + audit_summary.json.
+- tests/test_data_schema.py: 16/16 passed.
+
+### STEP 2 — Feature engineering + zero-leakage (closed)
+Sub-step 2.1 — cleaning + exclusion:
+- src/data/cleaning.py -> data/processed/eligibility_W{2,4,6,8}.parquet.
+- Excluded per window: W2=4,474; W4=5,055; W6=5,569; W8=6,071.
+- Eligible per window: W2=28,119; W4=27,538; W6=27,024; W8=26,522.
+- Exclusion decomposition (unregistration date): <0: 2,678; 0–14: 1,796;
+  15–28: 581; 29–42: 514; 43–56: 502; >56: 4,001. Total 10,072.
+  Cumulative cross-check matches excluded per window exactly.
+- experiments/02_feature_build/cleaning_report.md + cleaning_summary.json.
+
+Sub-step 2.2 — feature engineering:
+- src/features/build_features.py -> data/processed/features_W{2,4,6,8}.parquet.
+- 7 features per §5 (click_trend added v1.0.5).
+- Rows per window match eligible counts exactly.
+- still_registered = [1] in all windows.
+- CRITICAL FINDING (in feature_report.md): in W2, only 1 assessment in all
+  OULAD is due by day 14 (id_assessment=15008, BBB, 2014B, deadline day 12).
+  Delta_t and S_score have ~4% coverage in W2 (1,186 of 28,119), rising to
+  75% in W4 (20,670 of 27,538). Nulls in Delta_t/S_score are real.
+- click_trend nulls: students with no clicks in either period; imputation
+  deferred to Step 3 (Rule 1).
+- experiments/02_feature_build/feature_report.md + feature_summary.json.
+
+Sub-step 2.3 — leakage asserts:
+- tests/test_leakage.py: 6 passed, 2 skipped (R1, R2 deferred to Step 3).
+  R3: monotonic cumulative features, no-future-activity-in-W2, entropy
+  bounds. R4: no duplicate keys, eligibility matches features, overlap
+  students exist (3,538, not 3,808 — corrected in v1.0.7).
+- experiments/02_feature_build/leakage_report.md.
+
+## Folder structure (frozen)
+config/ data/{raw,interim,processed}/ src/{data,features,models,
+imbalance,explain,utils}/ experiments/{01_data_audit,02_feature_build,
+03_model_benchmark,04_imbalance_cost,05_shap,06_cross_cohort}/
+results/{tables,figures,mlflow}/ notebooks/ tests/ README.md
+requirements.txt. All src packages have __init__.py.
+
+## NEXT: STEP 3 — Model benchmarking (RQ2)
+Scope to present for approval BEFORE writing code:
+1. CV pipeline: GroupKFold(5) by student_id + sklearn Pipeline with
+   imputation and scaling fit ONLY on training fold (activates R1).
+2. Models: LogReg, DecisionTree, RF, XGBoost, LightGBM, per window.
+3. W2 runs under Variant A and Variant B (§16). Report both.
+4. Metrics: PR-AUC, Recall, F2, Precision, ROC-AUC, per fold and mean±std.
+5. Activate R1 and R2 tests: remove skip, implement asserts.
+6. Report in experiments/03_model_benchmark/ (English).
+Do NOT do tuning yet (Step 3b). Do NOT do cost-sensitive threshold
+(Step 4). Do NOT touch web app (Step 7).
+
+## How to resume
+1. Acknowledge this prompt. Confirm protocol v1.0.9, Step 2 closed,
+   decision A+B and tuning order frozen in §16.
+2. Present Step 3 scope for approval BEFORE writing code.
+3. Proceed one sub-step at a time; wait for explicit confirmation.

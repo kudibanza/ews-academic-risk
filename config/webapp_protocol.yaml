@@ -1,0 +1,201 @@
+# ============================================================
+# WEBAPP PROTOCOL — EWS Prototype (RQ5)
+# Separate from config/protocol.yaml. Freezes the UI/API contract.
+# Any change requires a new version + written justification.
+# ============================================================
+webapp_protocol_version: "1.0.0"
+frozen_date: "2026-11-17"
+author: "Kudibanza Afonso Pemba (3820251124)"
+scope: "minimal proof-of-concept prototype for RQ5 (SCS validation)"
+out_of_scope:
+  - "production authentication (OAuth2, SSO)"
+  - "load testing / concurrency beyond 10 sessions"
+  - "microservices / container orchestration"
+  - "real-time SHAP computation"
+
+# ---------- 1. STACK ----------
+stack:
+  backend:
+    framework: "FastAPI (pin latest stable; avoid root_path in constructor)"
+    validation: "Pydantic v2"
+    orm: "SQLAlchemy 2.0 async"
+    driver: "psycopg3 (async)"
+    auth: "JWT (python-jose) + passlib[bcrypt]"
+    note: >
+      Do not use FastAPI's deprecated root_path constructor argument.
+      Use `fastapi run --root-path` or the TestClient for local runs.
+  frontend:
+    framework: "React 19"
+    bundler: "Vite"
+    language: "TypeScript (strict)"
+    styling: "Tailwind CSS v4 + shadcn/ui"
+    data_fetching: "TanStack Query"
+    note: >
+      React 19: no forwardRef (ref is a normal prop); no ReactDOM.render
+      (use createRoot); no class components.
+  database:
+    engine: "PostgreSQL (v15+)"
+    schema: "users, artifacts_cache"
+    note: >
+      PostgreSQL caches the §14 JSONL artifacts for fast serving.
+      It does not store raw OULAD data.
+
+# ---------- 2. AUTHENTICATION & ROLES ----------
+auth:
+  method: "JWT (HS256), access token expiry 60 min"
+  roles:
+    - "admin"     # full access: all windows, all students, user management (future)
+    - "advisor"   # read-only: risk list, risk card, SCS survey
+  seed_users:
+    - username: "admin"
+      password: "<set-at-seed-time>"   # bcrypt-hashed, not plaintext in repo
+      role: "admin"
+    - username: "advisor"
+      password: "<set-at-seed-time>"
+      role: "advisor"
+  endpoints:
+    - "POST /auth/login  -> { access_token, token_type }"
+
+# ---------- 3. API ENDPOINTS ----------
+endpoints:
+  - path: "/api/windows"
+    method: "GET"
+    auth: ["admin", "advisor"]
+    response: "list[str]  # ['W2','W4','W6','W8']"
+
+  - path: "/api/students/{window}"
+    method: "GET"
+    auth: ["admin", "advisor"]
+    query_params:
+      - "flagged: bool = true   # filter to flagged students only"
+      - "limit: int = 50"
+      - "offset: int = 0"
+    response: >
+      Paginated list of student summaries for the window:
+      { student_id, presentation, risk_score, flagged }
+
+  - path: "/api/students/{student_id}/{window}"
+    method: "GET"
+    auth: ["admin", "advisor"]
+    response: >
+      Full §14 risk card:
+      { student_id, presentation, window, risk_score, threshold_applied,
+        flagged, top_positive_factors, top_negative_factors,
+        other_factors_sum, base_value }
+
+  - path: "/api/scs/questions"
+    method: "GET"
+    auth: ["advisor"]   # only advisors take the SCS survey
+    response: "list[{ id, text }]  # 10 items, pre-registered"
+
+  - path: "/api/scs/responses"
+    method: "POST"
+    auth: ["advisor"]
+    body: "{ responses: list[{ id: int, score: int (1-5) }] }"
+    response: "{ status: 'recorded' }"
+
+  - path: "/health"
+    method: "GET"
+    auth: []   # unauthenticated
+    response: "{ status: 'ok' }"
+
+  # ---------- admin endpoints ----------
+  - path: "/api/admin/users"
+    method: "GET"
+    auth: ["admin"]
+    response: "list[{ id, username, role, active }]"
+
+  - path: "/api/admin/users"
+    method: "POST"
+    auth: ["admin"]
+    body: "{ username: str, password: str, role: 'admin'|'advisor' }"
+    response: "{ id, username, role, active }"
+
+  - path: "/api/admin/users/{id}"
+    method: "PATCH"
+    auth: ["admin"]
+    body: "{ role?: 'admin'|'advisor', active?: bool }"
+    response: "{ id, username, role, active }"
+
+  - path: "/api/admin/users/{id}"
+    method: "DELETE"
+    auth: ["admin"]
+    response: "{ id, username, role, active }  # soft delete: active=false"
+
+  - path: "/api/admin/stats/{window}"
+    method: "GET"
+    auth: ["admin"]
+    response: >
+      {
+        window, n_students, n_flagged, flagged_pct,
+        risk_bins: [{ bin_start, bin_end, count }],
+        top_features: [{ feature, mean_abs_shap }]
+      }
+
+# ---------- 4. LATENCY TARGET ----------
+latency:
+  target: "p95 < 200 ms at 10 concurrent sessions"
+  measurement: "locust or k6, against /api/students/W8 (unfiltered, limit 50)"
+  scope: "read-only endpoints; SCS submission excluded from latency measurement"
+
+# ---------- 5. SCS INSTRUMENT (pre-registered) ----------
+scs:
+  source: "Holzinger, Carrington & Müller (2020), KI - Künstliche Intelligenz"
+  doi: "10.1007/s13218-020-00636-z"
+  scale: "Likert 1-5 (1=strongly disagree, 5=strongly agree)"
+  
+  items:
+    - id: 1
+      text: "I found that the data included all relevant known causal factors with sufficient precision and granularity."
+    - id: 2
+      text: "I understood the explanations within the context of my work."
+    - id: 3
+      text: "I could change the level of detail on demand."
+    - id: 4
+      text: "I did not need support to understand the explanations."
+    - id: 5
+      text: "I found the explanations helped me to understand causality."
+    - id: 6
+      text: "I was able to use the explanations with my knowledge base."
+    - id: 7
+      text: "I did not find inconsistencies between explanations."
+    - id: 8
+      text: "I think that most people would learn to understand the explanations very quickly."
+    - id: 9
+      text: "I did not need more references in the explanations."
+    - id: 10
+      text: "I received the explanations in a timely and efficient manner."  
+  scoring: "sum(item scores) / 50  # range 0.0–1.0"
+  protocol_note: >
+    The SCS is administered after the advisor completes the three
+    task scenarios (top-5 identification, risk-cause interpretation,
+    intervention logging). Results are reported descriptively (individual
+    scores and qualitative feedback), given the small-n design (3–6 advisors).
+  
+# ---------- 6. SEED DATA ----------
+seed_data:
+  windows: ["W8"]   # W8 chosen for demo: best model performance, most informative SHAP
+  artifacts_source: "results/shap_artifacts/W8/{2013B,2013J,2014B,2014J}.jsonl"
+  n_students_seeded: 500   # subset for demo (not the full 26,522)
+  selection: "stratified by flagged status (50% flagged, 50% not flagged)"
+
+# ---------- 7. ACCEPTANCE CRITERIA ----------
+acceptance:
+  - "All endpoints return the frozen schema"
+  - "p95 latency < 200 ms at 10 concurrent sessions"
+  - "Admin can access all endpoints; advisor can access read + SCS only"
+  - "SCS responses are recorded with timestamp and user_id"
+  - "The prototype serves §14 artifacts without recomputing SHAP"
+
+# ---------- 8. CHANGE LOG ----------
+change_log:
+  - version: "1.0.0"
+    date: "2026-11-17"
+    changes: "initial frozen version"
+
+  - version: "1.1.0"
+    date: "2026-11-17"
+    changes: >
+      Added admin endpoints (user management + dashboard stats).
+      SCS survey now accessible to admin and advisor. Frontend scope
+      extended with Admin Dashboard and User Management pages.
